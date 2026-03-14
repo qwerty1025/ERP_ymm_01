@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>門市進銷存 (GitHub Pages 部署版)</title>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        :root {
+            --ios-bg: #F2F2F7; --ios-card: #FFFFFF; --ios-blue: #007AFF; 
+            --ios-green: #34C759; --ios-red: #FF3B30; --ios-gray: #8E8E93; 
+            --ios-light-gray: #E5E5EA; --text-main: #1C1C1E;
+        }
+
+        body {
+            margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro TC", "Helvetica Neue", sans-serif;
+            background-color: var(--ios-bg); color: var(--text-main);
+            padding-bottom: calc(90px + env(safe-area-inset-bottom)); 
+            padding-top: env(safe-area-inset-top); -webkit-tap-highlight-color: transparent;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px);
+            position: sticky; top: 0; padding: 15px 20px; font-size: 22px; font-weight: 700;
+            border-bottom: 0.5px solid rgba(0,0,0,0.1); z-index: 50;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        .container { padding: 15px; }
+        .card { background: var(--ios-card); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .card-title { font-size: 18px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+
+        /* 操作頁面 - 品項列表 */
+        .operate-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 0; border-bottom: 0.5px solid var(--ios-light-gray);
+            cursor: pointer; transition: background 0.2s;
+        }
+        .operate-item:active { background: #F9F9F9; }
+        .operate-item:last-child { border-bottom: none; }
+        .item-meta { display: flex; flex-direction: column; gap: 4px; }
+        .item-code { font-size: 12px; color: var(--ios-blue); font-weight: 600; background: #E5F0FF; padding: 2px 6px; border-radius: 4px; align-self: flex-start;}
+        .item-name { font-size: 16px; font-weight: 600; }
+        .item-qty-badge { font-size: 16px; font-weight: 700; background: var(--ios-bg); padding: 6px 12px; border-radius: 8px; }
+
+        /* 總表 - 歷史紀錄清單 */
+        .log-item { padding: 12px 0; border-bottom: 0.5px solid var(--ios-light-gray); display: flex; flex-direction: column; gap: 8px;}
+        .log-header { display: flex; justify-content: space-between; font-size: 14px; color: var(--ios-gray); }
+        .log-body { display: flex; justify-content: space-between; align-items: center; }
+        .log-action.in { color: var(--ios-blue); font-weight: bold; }
+        .log-action.out { color: var(--ios-red); font-weight: bold; }
+        .log-controls { display: flex; gap: 10px; }
+        .btn-icon { background: none; border: none; font-size: 16px; color: var(--ios-gray); cursor: pointer; padding: 4px;}
+        
+        /* 總表 - 5週月曆視圖 (熱力圖概念) */
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; text-align: center; font-size: 12px; margin-top: 10px;}
+        .cal-header { color: var(--ios-gray); font-weight: 600; margin-bottom: 5px;}
+        .cal-day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 6px; background: #F2F2F7;}
+        .cal-day.has-in { background: #E5F0FF; color: var(--ios-blue); font-weight: bold;}
+        .cal-day.has-out { background: #FFEBEA; color: var(--ios-red); font-weight: bold;}
+        .cal-day.has-both { background: #E5F0FF; border: 2px solid #FFEBEA;}
+        .cal-day.settlement { background: #FFCC00; color: #fff; font-weight: bold;} /* 12號結算日 */
+
+        /* iOS 底部滑出選單 (Bottom Sheet Modal) */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4); z-index: 200; display: none; opacity: 0; transition: opacity 0.3s;
+        }
+        .modal-content {
+            position: fixed; bottom: -100%; left: 0; right: 0;
+            background: var(--ios-card); border-radius: 20px 20px 0 0; padding: 20px;
+            z-index: 201; transition: bottom 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            padding-bottom: calc(20px + env(safe-area-inset-bottom));
+        }
+        .modal-overlay.active { display: block; opacity: 1; }
+        .modal-overlay.active .modal-content { bottom: 0; }
+        
+        .modal-title { font-size: 20px; font-weight: 700; margin-bottom: 15px; text-align: center;}
+        .toggle-group { display: flex; background: var(--ios-bg); border-radius: 10px; padding: 3px; margin-bottom: 15px;}
+        .toggle-btn { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; color: var(--ios-gray); transition: 0.2s;}
+        .toggle-btn.active.in { background: var(--ios-card); color: var(--ios-blue); box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
+        .toggle-btn.active.out { background: var(--ios-card); color: var(--ios-red); box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
+        
+        .input-group { margin-bottom: 20px; }
+        .input-group label { display: block; font-size: 14px; color: var(--ios-gray); margin-bottom: 8px;}
+        .input-group input { width: 100%; box-sizing: border-box; padding: 12px; font-size: 18px; border: 1px solid var(--ios-light-gray); border-radius: 10px; outline: none;}
+        
+        .btn-submit { width: 100%; padding: 16px; border-radius: 12px; border: none; font-size: 18px; font-weight: 600; color: white; background: var(--ios-blue); cursor: pointer;}
+        .btn-close { width: 100%; padding: 12px; background: none; border: none; font-size: 16px; color: var(--ios-gray); margin-top: 10px; cursor: pointer;}
+
+        /* 底部導覽列 */
+        .tab-bar {
+            position: fixed; bottom: 0; left: 0; width: 100%;
+            background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px);
+            display: flex; justify-content: space-around; padding-top: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            border-top: 0.5px solid rgba(0,0,0,0.1); z-index: 100;
+        }
+        .tab-item { display: flex; flex-direction: column; align-items: center; font-size: 11px; color: var(--ios-gray); text-decoration: none; }
+        .tab-item.active { color: var(--ios-blue); }
+        .tab-icon { font-size: 24px; margin-bottom: 4px; }
+        .view-content { display: none; }
+        .view-content.active { display: block; }
+    </style>
+</head>
+<body>
+
+    <div class="header" id="header-title">
+        <span>門市操作</span>
+        <input type="date" id="global-date" style="border:none; background:transparent; font-size:16px; color:var(--ios-blue); font-weight:600; outline:none; text-align:right;">
+    </div>
+
+    <div class="container">
+        
+        <div id="view-operate" class="view-content active">
+            <div class="card">
+                <div class="card-title">點擊品項進行 進/退貨登記</div>
+                <div id="operate-list-container">
+                    </div>
+            </div>
+        </div>
+
+        <div id="view-products" class="view-content">
+            <div class="card">
+                <div class="card-title">商品主檔與定價</div>
+                <div id="product-list-container">
+                    </div>
+            </div>
+        </div>
+
+        <div id="view-history" class="view-content">
+            <div class="card" style="margin-bottom: 10px;">
+                <div class="card-title">
+                    近期5週動態對照
+                    <button class="btn-icon" onclick="alert('近期5週：展示每日進退貨熱力狀態。\n藍色=有進貨\n紅色=有退貨\n黃色=每月12日盤點日')">ℹ️</button>
+                </div>
+                <div id="calendar-view-container">
+                    </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">詳細操作歷程</div>
+                <div id="history-list-container">
+                    </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="modal-overlay" id="action-modal" onclick="closeModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="item-code" id="modal-item-code" style="margin: 0 auto 10px auto; width: fit-content; display: block;">A001</div>
+            <div class="modal-title" id="modal-item-name">招牌生乳捲</div>
+            
+            <div class="toggle-group">
+                <div class="toggle-btn active in" id="toggle-in" onclick="setModalType('IN')">入庫 (補貨 +)</div>
+                <div class="toggle-btn" id="toggle-out" onclick="setModalType('OUT')">出庫 (退換 -)</div>
+            </div>
+
+            <div class="input-group">
+                <label>數量</label>
+                <input type="number" id="modal-qty" placeholder="請輸入數量" min="1" inputmode="numeric">
+            </div>
+
+            <button class="btn-submit" id="btn-submit-action" onclick="submitAction()">確認送出</button>
+            <button class="btn-close" onclick="document.getElementById('action-modal').classList.remove('active')">取消</button>
+        </div>
+    </div>
+
+    <div class="tab-bar">
+        <a href="#" class="tab-item active" onclick="switchTab('operate', '門市操作', this)">
+            <div class="tab-icon">📦</div>操作
+        </a>
+        <a href="#" class="tab-item" onclick="switchTab('products', '商品設定', this)">
+            <div class="tab-icon">🏷️</div>商品
+        </a>
+        <a href="#" class="tab-item" onclick="switchTab('history', '營運總表', this)">
+            <div class="tab-icon">📋</div>總表
+        </a>
+    </div>
+
+    <script>
+        // --- 狀態與資料管理 (State Management) ---
+        // 初始化日期為今天 (2026-03-14)
+        document.getElementById('global-date').valueAsDate = new Date();
+
+        // 模擬商品資料庫
+        let products = [
+            { id: "P001", code: "A001", name: "招牌生乳捲", stock: 12, spec: "500g", cost: 150, price: 250 },
+            { id: "P002", code: "B001", name: "週末限定草莓塔", stock: 5, spec: "6吋", cost: 200, price: 350 },
+            { id: "P003", code: "C001", name: "常態重乳酪", stock: 8, spec: "400g", cost: 180, price: 280 },
+            { id: "P004", code: "D001", name: "黑森林切片", stock: 15, spec: "單片", cost: 60, price: 100 },
+            { id: "P005", code: "E001", name: "法式檸檬塔", stock: 4, spec: "4吋", cost: 90, price: 150 },
+            { id: "P006", code: "F001", name: "季節水果奶酪", stock: 20, spec: "150ml", cost: 40, price: 70 }
+        ];
+
+        // 模擬歷史紀錄 (具備獨立ID以利刪除/編輯)
+        let historyLogs = [
+            { id: "L001", date: "2026-03-14", time: "09:00", productId: "P001", type: "IN", qty: 10 },
+            { id: "L002", date: "2026-03-13", time: "22:30", productId: "P002", type: "OUT", qty: 2 },
+            { id: "L003", date: "2026-03-12", time: "20:00", productId: "ALL", type: "AUDIT", qty: 0 } // 月結盤點
+        ];
+
+        let currentModalItem = null;
+        let currentModalType = 'IN';
+
+        // --- UI 渲染邏輯 ---
+        function renderAll() {
+            renderOperate();
+            renderProducts();
+            renderHistory();
+            renderCalendar();
+        }
+
+        // 渲染: 操作列表
+        function renderOperate() {
+            const html = products.map(p => `
+                <div class="operate-item" onclick="openModal('${p.id}')">
+                    <div class="item-meta">
+                        <span class="item-code">${p.code}</span>
+                        <span class="item-name">${p.name}</span>
+                    </div>
+                    <div class="item-qty-badge">現有: ${p.stock}</div>
+                </div>
+            `).join('');
+            document.getElementById('operate-list-container').innerHTML = html;
+        }
+
+        // 渲染: 商品主檔
+        function renderProducts() {
+            const html = products.map(p => `
+                <div class="operate-item" style="cursor:default;">
+                    <div class="item-meta">
+                        <span class="item-code">${p.code}</span>
+                        <span class="item-name">${p.name}</span>
+                        <span style="font-size:12px; color:var(--ios-gray)">規格: ${p.spec} | 批發: $${p.cost} | 售價: $${p.price}</span>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('product-list-container').innerHTML = html;
+        }
+
+        // 渲染: 歷史總表
+        function renderHistory() {
+            // 倒序排列 (最新的在最上面)
+            const sortedLogs = [...historyLogs].reverse();
+            const html = sortedLogs.map(log => {
+                const product = products.find(p => p.id === log.productId) || { name: "全品項盤點", code: "SYS" };
+                const isAudit = log.type === 'AUDIT';
+                let actionSpan = `<span class="log-action in">+ 補入 ${log.qty}</span>`;
+                if(log.type === 'OUT') actionSpan = `<span class="log-action out">- 退換 ${log.qty}</span>`;
+                if(isAudit) actionSpan = `<span style="color:#D97706; font-weight:bold;">12日閉店結算</span>`;
+
+                return `
+                <div class="log-item">
+                    <div class="log-header">
+                        <span>📅 ${log.date} ${log.time}</span>
+                        <span class="item-code">${product.code}</span>
+                    </div>
+                    <div class="log-body">
+                        <div>
+                            <div style="font-weight:600; font-size:16px;">${product.name}</div>
+                            ${actionSpan}
+                        </div>
+                        ${!isAudit ? `
+                        <div class="log-controls">
+                            <button class="btn-icon" onclick="editLog('${log.id}')">✏️</button>
+                            <button class="btn-icon" onclick="deleteLog('${log.id}')">🗑️</button>
+                        </div>` : ''}
+                    </div>
+                </div>
+                `;
+            }).join('');
+            document.getElementById('history-list-container').innerHTML = html || "<div style='text-align:center; color:#8E8E93;'>暫無紀錄</div>";
+        }
+
+        // 渲染: 5週動態熱力月曆 (簡單模擬近5週)
+        function renderCalendar() {
+            const daysOfWeek = ['一', '二', '三', '四', '五', '六', '日'];
+            let headerHtml = daysOfWeek.map(d => `<div class="cal-header">${d}</div>`).join('');
+            
+            // 模擬產生 35 天 (5週) 的格子
+            let daysHtml = '';
+            for(let i = 1; i <= 35; i++) {
+                // 為了視覺展示，隨機標記進退貨，並固定第12天為盤點日
+                let classes = 'cal-day';
+                if(i === 12) classes += ' settlement'; // 12號
+                else if(i % 7 === 4 || i % 7 === 5) classes += ' has-in'; // 假設四五常進貨
+                else if(i % 7 === 0) classes += ' has-out'; // 假設週日退貨
+                
+                daysHtml += `<div class="${classes}">${i}</div>`;
+            }
+            document.getElementById('calendar-view-container').innerHTML = `
+                <div class="calendar-grid">
+                    ${headerHtml}
+                    ${daysHtml}
+                </div>
+                <div style="font-size:11px; color:#8E8E93; margin-top:10px; text-align:center;">(月曆將依據您的真實選取日期自動推算近35天)</div>
+            `;
+        }
+
+        // --- 業務邏輯 (CRUD) ---
+
+        // 1. 打開底部操作選單
+        function openModal(productId) {
+            currentModalItem = products.find(p => p.id === productId);
+            document.getElementById('modal-item-code').innerText = currentModalItem.code;
+            document.getElementById('modal-item-name').innerText = currentModalItem.name;
+            document.getElementById('modal-qty').value = '';
+            setModalType('IN'); // 預設補貨
+            document.getElementById('action-modal').classList.add('active');
+        }
+
+        function closeModal(e) {
+            if(e.target.id === 'action-modal') {
+                document.getElementById('action-modal').classList.remove('active');
+            }
+        }
+
+        function setModalType(type) {
+            currentModalType = type;
+            const btnIn = document.getElementById('toggle-in');
+            const btnOut = document.getElementById('toggle-out');
+            const submitBtn = document.getElementById('btn-submit-action');
+
+            if(type === 'IN') {
+                btnIn.classList.add('active', 'in');
+                btnOut.classList.remove('active', 'out');
+                submitBtn.style.background = 'var(--ios-blue)';
+                submitBtn.innerText = '確認補貨入庫';
+            } else {
+                btnOut.classList.add('active', 'out');
+                btnIn.classList.remove('active', 'in');
+                submitBtn.style.background = 'var(--ios-red)';
+                submitBtn.innerText = '確認退換出庫';
+            }
+        }
+
+        // 2. 送出進退貨
+        function submitAction() {
+            const qtyInput = document.getElementById('modal-qty').value;
+            const qty = parseInt(qtyInput);
+            if(isNaN(qty) || qty <= 0) { alert('請輸入正確數量'); return; }
+
+            // 更新庫存
+            if(currentModalType === 'IN') {
+                currentModalItem.stock += qty;
+            } else {
+                if(currentModalItem.stock < qty) { alert('退貨數量不可大於現有庫存！'); return; }
+                currentModalItem.stock -= qty;
+            }
+
+            // 寫入紀錄
+            const now = new Date();
+            const timeStr = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+            const dateStr = document.getElementById('global-date').value;
+
+            historyLogs.push({
+                id: "L" + Date.now(),
+                date: dateStr,
+                time: timeStr,
+                productId: currentModalItem.id,
+                type: currentModalType,
+                qty: qty
+            });
+
+            document.getElementById('action-modal').classList.remove('active');
+            renderAll();
+            
+            // 使用 iOS 內建震動回饋 (若支援)
+            if (navigator.vibrate) navigator.vibrate(50); 
+        }
+
+        // 3. 刪除紀錄 (包含庫存回滾邏輯)
+        function deleteLog(logId) {
+            if(confirm('確定要刪除這筆紀錄嗎？系統將自動調整庫存。')) {
+                const logIndex = historyLogs.findIndex(l => l.id === logId);
+                if(logIndex > -1) {
+                    const log = historyLogs[logIndex];
+                    const product = products.find(p => p.id === log.productId);
+                    
+                    // 庫存回滾防護邏輯
+                    if(log.type === 'IN') {
+                        product.stock -= log.qty; // 刪除進貨 = 扣回庫存
+                    } else if (log.type === 'OUT') {
+                        product.stock += log.qty; // 刪除退貨 = 加回庫存
+                    }
+                    
+                    historyLogs.splice(logIndex, 1);
+                    renderAll();
+                }
+            }
+        }
+
+        // 4. 編輯紀錄 (簡易版)
+        function editLog(logId) {
+            const log = historyLogs.find(l => l.id === logId);
+            const product = products.find(p => p.id === log.productId);
+            const newQtyStr = prompt(`修改 ${product.name} 的 ${log.type==='IN'?'進貨':'退貨'} 數量：`, log.qty);
+            
+            if(newQtyStr !== null && newQtyStr !== "") {
+                const newQty = parseInt(newQtyStr);
+                if(isNaN(newQty) || newQty <= 0) { alert('無效的數量'); return; }
+                
+                // 處理庫存差額回滾
+                const diff = newQty - log.qty;
+                if(log.type === 'IN') {
+                    product.stock += diff;
+                } else {
+                    product.stock -= diff; // 退貨量增加，庫存就要減少更多
+                }
+                
+                log.qty = newQty;
+                renderAll();
+            }
+        }
+
+        // 切換底部分頁
+        function switchTab(viewId, title, element) {
+            document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+            
+            // 只改變 Header 的標題文字，不蓋掉 DatePicker
+            document.getElementById('header-title').querySelector('span').innerText = title;
+            
+            document.querySelectorAll('.view-content').forEach(el => el.classList.remove('active'));
+            document.getElementById('view-' + viewId).classList.add('active');
+        }
+
+        // 初始化
+        renderAll();
+    </script>
+</body>
+</html>
